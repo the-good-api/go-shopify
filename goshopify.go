@@ -253,6 +253,9 @@ func (app App) NewClient(shopName, token string, opts ...Option) *Client {
 		opts = []Option{
 			WithVersion(app.DefaultAPIVersion),
 		}
+	} else {
+		// Add to the beginning of the slice. If another version is specified, it'll override the default
+		opts = append([]Option{WithVersion(app.DefaultAPIVersion)}, opts...)
 	}
 	return NewClient(app, shopName, token, opts...)
 }
