@@ -27,7 +27,7 @@ const (
 
 	// Shopify API version YYYY-MM - defaults to admin which uses the oldest stable version of the api
 	defaultApiPathPrefix = "admin"
-	defaultApiVersion    = "stable"
+	defaultApiVersion    = "2024-01"
 	defaultHttpTimeout   = 10
 )
 
@@ -248,6 +248,12 @@ func (c *Client) NewRequest(method, relPath string, body, options interface{}) (
 // e.g. "theshop.myshopify.com", or simply "theshop"
 // a.NewClient(shopName, token, opts) is equivalent to NewClient(a, shopName, token, opts)
 func (app App) NewClient(shopName, token string, opts ...Option) *Client {
+	if opts == nil {
+		opts = []Option{
+			WithVersion(defaultApiVersion),
+		}
+	}
+	opts = append(opts, WithVersion(defaultApiVersion))
 	return NewClient(app, shopName, token, opts...)
 }
 
