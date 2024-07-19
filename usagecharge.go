@@ -27,13 +27,16 @@ type UsageChargeServiceOp struct {
 
 // UsageCharge represents a Shopify UsageCharge.
 type UsageCharge struct {
-	BalanceRemaining *decimal.Decimal `json:"balance_remaining,omitempty"`
-	BalanceUsed      *decimal.Decimal `json:"balance_used,omitempty"`
-	CreatedAt        *time.Time       `json:"created_at,omitempty"`
-	Description      string           `json:"description,omitempty"`
-	Id               uint64           `json:"id,omitempty"`
-	Price            *decimal.Decimal `json:"price,omitempty"`
-	RiskLevel        *decimal.Decimal `json:"risk_level,omitempty"`
+	BalanceRemaining             *decimal.Decimal `json:"balance_remaining,omitempty"`
+	BalanceUsed                  *decimal.Decimal `json:"balance_used,omitempty"`
+	CreatedAt                    *time.Time       `json:"created_at,omitempty"`
+	UpdatedAt                    *time.Time       `json:"updated_at,omitempty"`
+	Description                  string           `json:"description,omitempty"`
+	Currency                     string           `json:"currency,omitempty"`
+	Id                           uint64           `json:"id,omitempty"`
+	RecurringApplicationChargeId uint64           `json:"recurring_application_charge_id,omitempty"`
+	Price                        *decimal.Decimal `json:"price,omitempty"`
+	RiskLevel                    *decimal.Decimal `json:"risk_level,omitempty"`
 }
 
 // UsageChargeResource represents the result from the
