@@ -235,52 +235,7 @@ func NewClient(app App, shopName, token string, opts ...Option) *Client {
 		pathPrefix: defaultApiPathPrefix,
 	}
 
-	c.Product = &ProductServiceOp{client: c}
-	c.CustomCollection = &CustomCollectionServiceOp{client: c}
-	c.SmartCollection = &SmartCollectionServiceOp{client: c}
-	c.Customer = &CustomerServiceOp{client: c}
-	c.CustomerAddress = &CustomerAddressServiceOp{client: c}
-	c.Order = &OrderServiceOp{client: c}
-	c.Fulfillment = &FulfillmentServiceOp{client: c}
-	c.DraftOrder = &DraftOrderServiceOp{client: c}
-	c.AbandonedCheckout = &AbandonedCheckoutServiceOp{client: c}
-	c.Shop = &ShopServiceOp{client: c}
-	c.Webhook = &WebhookServiceOp{client: c}
-	c.Variant = &VariantServiceOp{client: c}
-	c.Image = &ImageServiceOp{client: c}
-	c.Transaction = &TransactionServiceOp{client: c}
-	c.Theme = &ThemeServiceOp{client: c}
-	c.Asset = &AssetServiceOp{client: c}
-	c.ScriptTag = &ScriptTagServiceOp{client: c}
-	c.RecurringApplicationCharge = &RecurringApplicationChargeServiceOp{client: c}
-	c.Metafield = &MetafieldServiceOp{client: c}
-	c.Blog = &BlogServiceOp{client: c}
-	c.ApplicationCharge = &ApplicationChargeServiceOp{client: c}
-	c.Redirect = &RedirectServiceOp{client: c}
-	c.Page = &PageServiceOp{client: c}
-	c.StorefrontAccessToken = &StorefrontAccessTokenServiceOp{client: c}
-	c.UsageCharge = &UsageChargeServiceOp{client: c}
-	c.Collect = &CollectServiceOp{client: c}
-	c.Collection = &CollectionServiceOp{client: c}
-	c.Location = &LocationServiceOp{client: c}
-	c.DiscountCode = &DiscountCodeServiceOp{client: c}
-	c.PriceRule = &PriceRuleServiceOp{client: c}
-	c.InventoryItem = &InventoryItemServiceOp{client: c}
-	c.ShippingZone = &ShippingZoneServiceOp{client: c}
-	c.ProductListing = &ProductListingServiceOp{client: c}
-	c.InventoryLevel = &InventoryLevelServiceOp{client: c}
-	c.AccessScopes = &AccessScopesServiceOp{client: c}
-	c.FulfillmentService = &FulfillmentServiceServiceOp{client: c}
-	c.CarrierService = &CarrierServiceOp{client: c}
-	c.Payouts = &PayoutsServiceOp{client: c}
-	c.GiftCard = &GiftCardServiceOp{client: c}
-	c.FulfillmentOrder = &FulfillmentOrderServiceOp{client: c}
 	c.GraphQL = &GraphQLServiceOp{client: c}
-	c.AssignedFulfillmentOrder = &AssignedFulfillmentOrderServiceOp{client: c}
-	c.FulfillmentEvent = &FulfillmentEventServiceOp{client: c}
-	c.FulfillmentRequest = &FulfillmentRequestServiceOp{client: c}
-	c.PaymentsTransactions = &PaymentsTransactionsServiceOp{client: c}
-	c.OrderRisk = &OrderRiskServiceOp{client: c}
 
 	// apply any options
 	for _, opt := range opts {
