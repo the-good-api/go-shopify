@@ -84,53 +84,7 @@ type Client struct {
 
 	RateLimits RateLimitInfo
 
-	// Services used for communicating with the API
-	Product                    ProductService
-	CustomCollection           CustomCollectionService
-	SmartCollection            SmartCollectionService
-	Customer                   CustomerService
-	CustomerAddress            CustomerAddressService
-	Order                      OrderService
-	Fulfillment                FulfillmentService
-	DraftOrder                 DraftOrderService
-	AbandonedCheckout          AbandonedCheckoutService
-	Shop                       ShopService
-	Webhook                    WebhookService
-	Variant                    VariantService
-	Image                      ImageService
-	Transaction                TransactionService
-	Theme                      ThemeService
-	Asset                      AssetService
-	ScriptTag                  ScriptTagService
-	RecurringApplicationCharge RecurringApplicationChargeService
-	UsageCharge                UsageChargeService
-	Metafield                  MetafieldService
-	Blog                       BlogService
-	ApplicationCharge          ApplicationChargeService
-	Redirect                   RedirectService
-	Page                       PageService
-	StorefrontAccessToken      StorefrontAccessTokenService
-	Collect                    CollectService
-	Collection                 CollectionService
-	Location                   LocationService
-	DiscountCode               DiscountCodeService
-	PriceRule                  PriceRuleService
-	InventoryItem              InventoryItemService
-	ShippingZone               ShippingZoneService
-	ProductListing             ProductListingService
-	InventoryLevel             InventoryLevelService
-	AccessScopes               AccessScopesService
-	FulfillmentService         FulfillmentServiceService
-	CarrierService             CarrierServiceService
-	Payouts                    PayoutsService
-	GiftCard                   GiftCardService
-	FulfillmentOrder           FulfillmentOrderService
-	GraphQL                    GraphQLService
-	AssignedFulfillmentOrder   AssignedFulfillmentOrderService
-	FulfillmentEvent           FulfillmentEventService
-	FulfillmentRequest         FulfillmentRequestService
-	PaymentsTransactions       PaymentsTransactionsService
-	OrderRisk                  OrderRiskService
+	GraphQL GraphQLService
 }
 
 // A general response error that follows a similar layout to Shopify's response
