@@ -181,3 +181,116 @@ func hmacSHA256(key, body, expected []byte) bool {
 
 	return hmac.Equal(dst, expected)
 }
+
+// TokenResponse represents the response from Shopify's access token endpoint.
+type TokenResponse struct {
+	AccessToken           string `json:"access_token"`
+	ExpiresIn             int    `json:"expires_in"`
+	RefreshToken          string `json:"refresh_token"`
+	RefreshTokenExpiresIn int    `json:"refresh_token_expires_in"`
+	Scope                 string `json:"scope"`
+}
+
+// TokenRequest represents authorization code exchange parameters.
+type TokenRequest struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	Code         string `json:"code"`
+	Expiring     int    `json:"expiring,omitempty"`
+}
+
+// RefreshTokenRequest represents the request to refresh an expiring token.
+type RefreshTokenRequest struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	GrantType    string `json:"grant_type"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+// TokenExchangeRequest represents the parameters for OAuth token exchange.
+type TokenExchangeRequest struct {
+	ClientID           string `json:"client_id"`
+	ClientSecret       string `json:"client_secret"`
+	GrantType          string `json:"grant_type"`
+	SubjectToken       string `json:"subject_token"`
+	SubjectTokenType   string `json:"subject_token_type"`
+	RequestedTokenType string `json:"requested_token_type"`
+	Expiring           int    `json:"expiring"`
+}
+
+// GetAccessTokenResponse retrieves an access token response using an authorization code.
+func (app App) GetAccessTokenResponse(shopName string, code string, expiring bool) (*TokenResponse, error) {
+	expVal := 0
+	if expiring {
+		expVal = 1
+	}
+
+	data := TokenRequest{
+		ClientID:     app.ApiKey,
+		ClientSecret: app.ApiSecret,
+		Code:         code,
+		Expiring:     expVal,
+	}
+
+	client := app.Client
+	if client == nil {
+		client = NewClient(app, shopName, "")
+	}
+
+	req, err := client.NewRequest("POST", accessTokenRelPath, data, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenResponse := new(TokenResponse)
+	err = client.Do(req, tokenResponse)
+	return tokenResponse, err
+}
+
+// RefreshAccessToken refreshes an expiring access token using a refresh token.
+func (app App) RefreshAccessToken(shopName string, refreshToken string) (*TokenResponse, error) {
+	data := RefreshTokenRequest{
+		ClientID:     app.ApiKey,
+		ClientSecret: app.ApiSecret,
+		GrantType:    "refresh_token",
+		RefreshToken: refreshToken,
+	}
+
+	client := app.Client
+	if client == nil {
+		client = NewClient(app, shopName, "")
+	}
+
+	req, err := client.NewRequest("POST", accessTokenRelPath, data, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenResponse := new(TokenResponse)
+	err = client.Do(req, tokenResponse)
+	return tokenResponse, err
+}
+
+// ExchangeToken performs a token exchange (e.g. session token to offline token, or migration).
+func (app App) ExchangeToken(shopName string, exchangeReq TokenExchangeRequest) (*TokenResponse, error) {
+	if exchangeReq.ClientID == "" {
+		exchangeReq.ClientID = app.ApiKey
+	}
+	if exchangeReq.ClientSecret == "" {
+		exchangeReq.ClientSecret = app.ApiSecret
+	}
+
+	client := app.Client
+	if client == nil {
+		client = NewClient(app, shopName, "")
+	}
+
+	req, err := client.NewRequest("POST", accessTokenRelPath, exchangeReq, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	tokenResponse := new(TokenResponse)
+	err = client.Do(req, tokenResponse)
+	return tokenResponse, err
+}
