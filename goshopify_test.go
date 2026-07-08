@@ -54,6 +54,7 @@ func setup() {
 
 func teardown() {
 	httpmock.DeactivateAndReset()
+	accessTokenRelPath = "admin/oauth/access_token"
 }
 
 func loadFixture(filename string) []byte {

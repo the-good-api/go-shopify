@@ -1,4 +1,4 @@
-module github.com/the-good-api/go-shopify/v3
+module github.com/the-good-api/go-shopify/v4
 
 go 1.13
 

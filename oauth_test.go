@@ -261,3 +261,151 @@ func TestVerifyWebhookRequestVerbose(t *testing.T) {
 	}
 
 }
+
+func TestAppGetAccessTokenResponse_Expiring(t *testing.T) {
+	setup()
+	defer teardown()
+
+	httpmock.RegisterResponder("POST", "https://fooshop.myshopify.com/admin/oauth/access_token",
+		httpmock.NewStringResponder(200, `{"access_token":"footoken","expires_in":3600,"refresh_token":"foorefresh","refresh_token_expires_in":7776000,"scope":"read_products"}`))
+
+	app.Client = client
+	resp, err := app.GetAccessTokenResponse("fooshop", "foocode", true)
+
+	if err != nil {
+		t.Fatalf("App.GetAccessTokenResponse(): %v", err)
+	}
+
+	if resp.AccessToken != "footoken" {
+		t.Errorf("AccessToken = %v, expected footoken", resp.AccessToken)
+	}
+	if resp.ExpiresIn != 3600 {
+		t.Errorf("ExpiresIn = %v, expected 3600", resp.ExpiresIn)
+	}
+	if resp.RefreshToken != "foorefresh" {
+		t.Errorf("RefreshToken = %v, expected foorefresh", resp.RefreshToken)
+	}
+	if resp.RefreshTokenExpiresIn != 7776000 {
+		t.Errorf("RefreshTokenExpiresIn = %v, expected 7776000", resp.RefreshTokenExpiresIn)
+	}
+	if resp.Scope != "read_products" {
+		t.Errorf("Scope = %v, expected read_products", resp.Scope)
+	}
+}
+
+func TestAppGetAccessTokenResponse_Legacy(t *testing.T) {
+	setup()
+	defer teardown()
+
+	httpmock.RegisterResponder("POST", "https://fooshop.myshopify.com/admin/oauth/access_token",
+		httpmock.NewStringResponder(200, `{"access_token":"footoken","scope":"read_products"}`))
+
+	app.Client = client
+	resp, err := app.GetAccessTokenResponse("fooshop", "foocode", false)
+
+	if err != nil {
+		t.Fatalf("App.GetAccessTokenResponse(): %v", err)
+	}
+
+	if resp.AccessToken != "footoken" {
+		t.Errorf("AccessToken = %v, expected footoken", resp.AccessToken)
+	}
+	if resp.RefreshToken != "" {
+		t.Errorf("RefreshToken = %v, expected empty", resp.RefreshToken)
+	}
+}
+
+func TestAppGetAccessTokenResponse_Error(t *testing.T) {
+	setup()
+	defer teardown()
+
+	httpmock.RegisterResponder("POST", "https://fooshop.myshopify.com/admin/oauth/access_token",
+		httpmock.NewStringResponder(400, `{"error":"invalid_grant"}`))
+
+	app.Client = client
+	_, err := app.GetAccessTokenResponse("fooshop", "foocode", true)
+
+	if err == nil {
+		t.Fatal("Expected error, got nil")
+	}
+}
+
+func TestAppRefreshAccessToken_Success(t *testing.T) {
+	setup()
+	defer teardown()
+
+	httpmock.RegisterResponder("POST", "https://fooshop.myshopify.com/admin/oauth/access_token",
+		httpmock.NewStringResponder(200, `{"access_token":"newtoken","expires_in":3600,"refresh_token":"newrefresh","refresh_token_expires_in":7776000,"scope":"read_products"}`))
+
+	app.Client = client
+	resp, err := app.RefreshAccessToken("fooshop", "foorefresh")
+
+	if err != nil {
+		t.Fatalf("App.RefreshAccessToken(): %v", err)
+	}
+
+	if resp.AccessToken != "newtoken" {
+		t.Errorf("AccessToken = %v, expected newtoken", resp.AccessToken)
+	}
+	if resp.RefreshToken != "newrefresh" {
+		t.Errorf("RefreshToken = %v, expected newrefresh", resp.RefreshToken)
+	}
+}
+
+func TestAppRefreshAccessToken_Error(t *testing.T) {
+	setup()
+	defer teardown()
+
+	httpmock.RegisterResponder("POST", "https://fooshop.myshopify.com/admin/oauth/access_token",
+		httpmock.NewStringResponder(401, `{"error":"invalid_request","error_description":"This request requires an active refresh_token"}`))
+
+	app.Client = client
+	_, err := app.RefreshAccessToken("fooshop", "expiredrefresh")
+
+	if err == nil {
+		t.Fatal("Expected error, got nil")
+	}
+}
+
+func TestAppExchangeToken_Success(t *testing.T) {
+	setup()
+	defer teardown()
+
+	httpmock.RegisterResponder("POST", "https://fooshop.myshopify.com/admin/oauth/access_token",
+		httpmock.NewStringResponder(200, `{"access_token":"exchangedtoken","expires_in":3600,"refresh_token":"exchangedrefresh","refresh_token_expires_in":7776000,"scope":"read_products"}`))
+
+	app.Client = client
+	resp, err := app.ExchangeToken("fooshop", TokenExchangeRequest{
+		GrantType:          "urn:ietf:params:oauth:grant-type:token-exchange",
+		SubjectToken:       "legacytoken",
+		SubjectTokenType:   "urn:shopify:params:oauth:token-type:offline-access-token",
+		RequestedTokenType: "urn:shopify:params:oauth:token-type:offline-access-token",
+		Expiring:           1,
+	})
+
+	if err != nil {
+		t.Fatalf("App.ExchangeToken(): %v", err)
+	}
+
+	if resp.AccessToken != "exchangedtoken" {
+		t.Errorf("AccessToken = %v, expected exchangedtoken", resp.AccessToken)
+	}
+	if resp.RefreshToken != "exchangedrefresh" {
+		t.Errorf("RefreshToken = %v, expected exchangedrefresh", resp.RefreshToken)
+	}
+}
+
+func TestAppExchangeToken_Error(t *testing.T) {
+	setup()
+	defer teardown()
+
+	httpmock.RegisterResponder("POST", "https://fooshop.myshopify.com/admin/oauth/access_token",
+		httpmock.NewStringResponder(400, `{"error":"bad_exchange"}`))
+
+	app.Client = client
+	_, err := app.ExchangeToken("fooshop", TokenExchangeRequest{})
+
+	if err == nil {
+		t.Fatal("Expected error, got nil")
+	}
+}
