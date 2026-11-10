@@ -2,6 +2,7 @@ package goshopify
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -36,6 +37,18 @@ func (app App) AuthorizeUrl(shopName string, state string) string {
 }
 
 func (app App) GetAccessToken(shopName string, code string) (string, error) {
+	if app.IsAppOnlyTokensEnabled() {
+		var fallbackTransport http.RoundTripper
+		if app.Client != nil && app.Client.Client != nil {
+			fallbackTransport = app.Client.Client.Transport
+		}
+		tok, err := app.getAppOnlyAccessTokenWithTransport(context.Background(), shopName, fallbackTransport)
+		if err != nil {
+			return "", err
+		}
+		return tok.AccessToken, nil
+	}
+
 	type Token struct {
 		Token string `json:"access_token"`
 	}

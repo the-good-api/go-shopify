@@ -46,6 +46,14 @@ type App struct {
 	Password          string
 	Client            *Client // see GetAccessToken
 	DefaultAPIVersion string
+
+	// Optional Shopify Application-Only Access Token (Option 3) configuration.
+	// If unset, goshopify automatically falls back to environment variables:
+	// SHOPIFY_APP_ONLY_TOKENS, SHOPIFY_KEY_ID, SHOPIFY_PRIVATE_KEY, SHOPIFY_PRIVATE_KEY_PATH.
+	AppOnlyTokens  bool
+	KeyID          string
+	PrivateKey     string
+	PrivateKeyPath string
 }
 
 type RateLimitInfo struct {
@@ -242,6 +250,10 @@ func NewClient(app App, shopName, token string, opts ...Option) *Client {
 		opt(c)
 	}
 
+	if app.IsAppOnlyTokensEnabled() && shopName != "" {
+		c.Client = app.WrapHTTPClient(c.Client)
+	}
+
 	return c
 }
 
@@ -263,6 +275,11 @@ func (c *Client) doGetHeaders(req *http.Request, v interface{}) (http.Header, er
 	var err error
 	retries := c.retries
 	c.attempts = 0
+	if c.app.IsAppOnlyTokensEnabled() && c.Client != nil {
+		if _, ok := c.Client.Transport.(*appOnlyTokenTransport); !ok {
+			c.Client = c.app.WrapHTTPClient(c.Client)
+		}
+	}
 	c.logRequest(req)
 
 	for {
