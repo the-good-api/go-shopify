@@ -69,7 +69,9 @@ func TestAppGetAccessTokenError(t *testing.T) {
 	}
 
 	expectedError = errors.New("parse ://example.com: missing protocol scheme")
+	origRelPath := accessTokenRelPath
 	accessTokenRelPath = "://example.com" // cause NewRequest to trip a parse error
+	defer func() { accessTokenRelPath = origRelPath }()
 	token, err = app.GetAccessToken("fooshop", "")
 	if err == nil || !strings.Contains(err.Error(), "missing protocol scheme") {
 		t.Errorf("Expected error %s got error %s", expectedError.Error(), err.Error())

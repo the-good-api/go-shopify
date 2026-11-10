@@ -1,28 +1,22 @@
 name: Go
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
 
 jobs:
-  build:
-
+  test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: [ '1.18', '1.19', '1.20' ]
-
     steps:
-      - uses: actions/checkout@v3
-      - name: Setup Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v3
+      - uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version: '1.24.x'
       - name: Build
         run: go build -v ./...
+      - name: Vet
+        run: go vet ./...
       - name: Test
-        run: go test -coverprofile=coverage.txt -v ./...
-      - name: Upload code coverage results
-        uses: codecov/codecov-action@v3
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
-          verbose: true
+        run: go test -v ./...

@@ -159,6 +159,9 @@ func TestNewRequest(t *testing.T) {
 }
 
 func TestNewRequestForPrivateApp(t *testing.T) {
+	setup()
+	defer teardown()
+
 	testClient := NewClient(app, "fooshop", "", WithVersion(testApiVersion))
 
 	inURL, outURL := "foo?page=1", "https://fooshop.myshopify.com/foo?limit=10&page=1"
