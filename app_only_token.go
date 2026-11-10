@@ -25,6 +25,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,12 +46,13 @@ const (
 )
 
 var (
-	appOnlyMaxAttempts   = 3
-	appOnlyRetryBackoff  = 250 * time.Millisecond
-	appOnlyTokenCache    sync.Map // map[string]*AppOnlyToken (keyed by normalized shop domain)
-	parsedAppOnlyKeyMap  sync.Map // map[string]*parsedAppOnlyKey (keyed by SHA-256 of config)
-	validShopDomainRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9\-]*\.myshopify\.com$`)
-	appOnlyFlight        appOnlySingleFlight
+	appOnlyMaxAttempts     = 3
+	appOnlyRetryBackoff    = 250 * time.Millisecond
+	appOnlyTokenCache      sync.Map // map[string]*AppOnlyToken (keyed by clientID:normalizedShop)
+	appOnlyInvalidationSeq sync.Map // map[string]*uint64 (monotonic invalidation epoch per cache key)
+	parsedAppOnlyKeyMap    sync.Map // map[string]*parsedAppOnlyKey (keyed by SHA-256 of config)
+	validShopDomainRegex   = regexp.MustCompile(`^[a-z0-9][a-z0-9\-]*\.myshopify\.com$`)
+	appOnlyFlight          appOnlySingleFlight
 )
 
 // AppOnlyToken represents a cached short-lived (1-hour) Shopify Admin API access token
@@ -525,9 +527,33 @@ func (app App) requestAppOnlyAccessTokenWithTransport(ctx context.Context, shopN
 	return nil, lastErr
 }
 
+func (app App) appOnlyCacheKey(normalizedShop string) string {
+	clientID := strings.TrimSpace(app.ApiKey)
+	if clientID == "" {
+		return normalizedShop
+	}
+	return clientID + ":" + normalizedShop
+}
+
+func currentInvalidationEpoch(cacheKey string) uint64 {
+	raw, ok := appOnlyInvalidationSeq.Load(cacheKey)
+	if !ok {
+		return 0
+	}
+	return atomic.LoadUint64(raw.(*uint64))
+}
+
+func bumpInvalidationEpoch(cacheKey string) uint64 {
+	var zero uint64
+	actual, _ := appOnlyInvalidationSeq.LoadOrStore(cacheKey, &zero)
+	next := atomic.AddUint64(actual.(*uint64), 1)
+	appOnlyTokenCache.Delete(cacheKey)
+	return next
+}
+
 // GetAppOnlyAccessToken returns a valid application-only access token for shopName,
 // serving from the per-process cache while before RenewAt and deduplicating
-// concurrent renewals per shop via singleflight.
+// concurrent renewals per (client_id, shop) via singleflight.
 func (app App) GetAppOnlyAccessToken(ctx context.Context, shopName string) (*AppOnlyToken, error) {
 	return app.getAppOnlyAccessTokenWithTransport(ctx, shopName, nil)
 }
@@ -537,10 +563,12 @@ func (app App) getAppOnlyAccessTokenWithTransport(ctx context.Context, shopName 
 	if err != nil {
 		return nil, err
 	}
+	cacheKey := app.appOnlyCacheKey(normalizedShop)
+	outerEpoch := currentInvalidationEpoch(cacheKey)
 
 	now := time.Now()
 	var currentCached *AppOnlyToken
-	if raw, ok := appOnlyTokenCache.Load(normalizedShop); ok {
+	if raw, ok := appOnlyTokenCache.Load(cacheKey); ok {
 		if tok, ok := raw.(*AppOnlyToken); ok && tok != nil && tok.AccessToken != "" {
 			if now.Before(tok.RenewAt) {
 				cp := *tok
@@ -550,15 +578,16 @@ func (app App) getAppOnlyAccessTokenWithTransport(ctx context.Context, shopName 
 		}
 	}
 
-	flightKey := "app_only:" + normalizedShop
+	flightKey := "app_only:" + cacheKey
 	tok, err := appOnlyFlight.Do(flightKey, func() (*AppOnlyToken, error) {
 		checkNow := time.Now()
-		if raw, ok := appOnlyTokenCache.Load(normalizedShop); ok {
+		if raw, ok := appOnlyTokenCache.Load(cacheKey); ok {
 			if cached, ok := raw.(*AppOnlyToken); ok && cached != nil && cached.AccessToken != "" && checkNow.Before(cached.RenewAt) {
 				return cached, nil
 			}
 		}
 
+		epochBeforeMint := currentInvalidationEpoch(cacheKey)
 		reqCtx := ctx
 		if reqCtx == nil {
 			reqCtx = context.Background()
@@ -569,14 +598,16 @@ func (app App) getAppOnlyAccessTokenWithTransport(ctx context.Context, shopName 
 		minted, reqErr := app.requestAppOnlyAccessTokenWithTransport(reqCtx, normalizedShop, fallbackTransport)
 		if reqErr != nil {
 			nowAfterErr := time.Now()
-			if currentCached != nil && nowAfterErr.Before(currentCached.ExpiresAt) {
+			// Only reuse currentCached during proactive jitter renewal if the shop was NOT
+			// invalidated (e.g., via APP_UNINSTALLED or 401) since we read currentCached.
+			if currentCached != nil && nowAfterErr.Before(currentCached.ExpiresAt) && currentInvalidationEpoch(cacheKey) == outerEpoch {
 				fallback := *currentCached
 				nextTry := nowAfterErr.Add(15 * time.Second)
 				if nextTry.After(fallback.ExpiresAt) {
 					nextTry = fallback.ExpiresAt
 				}
 				fallback.RenewAt = nextTry
-				appOnlyTokenCache.Store(normalizedShop, &fallback)
+				appOnlyTokenCache.Store(cacheKey, &fallback)
 				log.Printf("[goshopify] App-only token proactive renewal failed for %s (%v); reusing current token until %s",
 					normalizedShop, reqErr, fallback.ExpiresAt.UTC().Format(time.RFC3339))
 				return &fallback, nil
@@ -584,7 +615,11 @@ func (app App) getAppOnlyAccessTokenWithTransport(ctx context.Context, shopName 
 			return nil, reqErr
 		}
 
-		appOnlyTokenCache.Store(normalizedShop, minted)
+		// Guard against an APP_UNINSTALLED / InvalidateAppOnlyAccessToken call that arrived
+		// while this OAuth request was in flight so a pre-uninstall token never repopulates cache.
+		if currentInvalidationEpoch(cacheKey) == epochBeforeMint {
+			appOnlyTokenCache.Store(cacheKey, minted)
+		}
 		log.Printf("[goshopify] Minted application-only access token (Option 3) for shop %s (expires_at=%s)",
 			normalizedShop, minted.ExpiresAt.UTC().Format(time.RFC3339))
 		return minted, nil
@@ -599,29 +634,43 @@ func (app App) getAppOnlyAccessTokenWithTransport(ctx context.Context, shopName 
 // ForceRefreshAppOnlyAccessToken invalidates any cached application-only token for
 // shopName and requests a brand-new token from Shopify immediately.
 func (app App) ForceRefreshAppOnlyAccessToken(ctx context.Context, shopName string) (*AppOnlyToken, error) {
+	return app.forceRefreshAppOnlyAccessTokenWithTransport(ctx, shopName, nil)
+}
+
+func (app App) forceRefreshAppOnlyAccessTokenWithTransport(ctx context.Context, shopName string, fallbackTransport http.RoundTripper) (*AppOnlyToken, error) {
 	normalizedShop, err := NormalizeShopDomain(shopName)
 	if err != nil {
 		return nil, err
 	}
-	appOnlyTokenCache.Delete(normalizedShop)
-	tok, err := app.RequestAppOnlyAccessToken(ctx, normalizedShop)
+	cacheKey := app.appOnlyCacheKey(normalizedShop)
+	epochAfterBump := bumpInvalidationEpoch(cacheKey)
+
+	reqCtx := ctx
+	if reqCtx == nil {
+		reqCtx = context.Background()
+	}
+	tok, err := app.requestAppOnlyAccessTokenWithTransport(reqCtx, normalizedShop, fallbackTransport)
 	if err != nil {
 		return nil, err
 	}
-	appOnlyTokenCache.Store(normalizedShop, tok)
+	if currentInvalidationEpoch(cacheKey) == epochAfterBump {
+		appOnlyTokenCache.Store(cacheKey, tok)
+	}
 	log.Printf("[goshopify] Force-minted application-only access token (Option 3) for shop %s (expires_at=%s)",
 		normalizedShop, tok.ExpiresAt.UTC().Format(time.RFC3339))
-	return tok, nil
+	cp := *tok
+	return &cp, nil
 }
 
 // GetCachedAppOnlyToken returns a copy of the currently cached application-only
-// token metadata for shopName if present and not yet expired.
-func GetCachedAppOnlyToken(shopName string) *AppOnlyToken {
+// token metadata for this App's (client_id, shopName) pair if present and not yet expired.
+func (app App) GetCachedAppOnlyToken(shopName string) *AppOnlyToken {
 	normalizedShop, err := NormalizeShopDomain(shopName)
 	if err != nil {
 		return nil
 	}
-	if raw, ok := appOnlyTokenCache.Load(normalizedShop); ok {
+	cacheKey := app.appOnlyCacheKey(normalizedShop)
+	if raw, ok := appOnlyTokenCache.Load(cacheKey); ok {
 		if tok, ok := raw.(*AppOnlyToken); ok && tok != nil && time.Now().Before(tok.ExpiresAt) {
 			cp := *tok
 			return &cp
@@ -630,12 +679,60 @@ func GetCachedAppOnlyToken(shopName string) *AppOnlyToken {
 	return nil
 }
 
-// InvalidateAppOnlyAccessToken evicts the cached application-only access token for shopName.
+// GetCachedAppOnlyToken returns a copy of any currently cached application-only
+// token metadata for shopName if present and not yet expired.
+func GetCachedAppOnlyToken(shopName string) *AppOnlyToken {
+	normalizedShop, err := NormalizeShopDomain(shopName)
+	if err != nil {
+		return nil
+	}
+	now := time.Now()
+	if raw, ok := appOnlyTokenCache.Load(normalizedShop); ok {
+		if tok, ok := raw.(*AppOnlyToken); ok && tok != nil && now.Before(tok.ExpiresAt) {
+			cp := *tok
+			return &cp
+		}
+	}
+	suffix := ":" + normalizedShop
+	var found *AppOnlyToken
+	appOnlyTokenCache.Range(func(k, v interface{}) bool {
+		ks, ok := k.(string)
+		if !ok || !strings.HasSuffix(ks, suffix) {
+			return true
+		}
+		if tok, ok := v.(*AppOnlyToken); ok && tok != nil && now.Before(tok.ExpiresAt) {
+			cp := *tok
+			found = &cp
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// InvalidateAppOnlyAccessToken evicts the cached application-only access token for shopName
+// and increments its invalidation epoch so in-flight renewals cannot repopulate stale tokens.
 func (app App) InvalidateAppOnlyAccessToken(shopName string) {
 	if normalizedShop, err := NormalizeShopDomain(shopName); err == nil {
-		appOnlyTokenCache.Delete(normalizedShop)
+		cacheKey := app.appOnlyCacheKey(normalizedShop)
+		bumpInvalidationEpoch(cacheKey)
+		if cacheKey != normalizedShop {
+			bumpInvalidationEpoch(normalizedShop)
+		} else {
+			suffix := ":" + normalizedShop
+			appOnlyTokenCache.Range(func(k, _ interface{}) bool {
+				if ks, ok := k.(string); ok && strings.HasSuffix(ks, suffix) {
+					bumpInvalidationEpoch(ks)
+				}
+				return true
+			})
+		}
 	} else {
-		appOnlyTokenCache.Delete(strings.ToLower(strings.TrimSpace(shopName)))
+		raw := strings.ToLower(strings.TrimSpace(shopName))
+		if raw != "" {
+			bumpInvalidationEpoch(app.appOnlyCacheKey(raw))
+			bumpInvalidationEpoch(raw)
+		}
 	}
 }
 
@@ -643,6 +740,10 @@ func (app App) InvalidateAppOnlyAccessToken(shopName string) {
 func ClearAllAppOnlyTokenCaches() {
 	appOnlyTokenCache.Range(func(k, _ interface{}) bool {
 		appOnlyTokenCache.Delete(k)
+		return true
+	})
+	appOnlyInvalidationSeq.Range(func(k, _ interface{}) bool {
+		appOnlyInvalidationSeq.Delete(k)
 		return true
 	})
 	parsedAppOnlyKeyMap.Range(func(k, _ interface{}) bool {
