@@ -73,11 +73,11 @@ func TestCreateClientAssertionRS256AndES256(t *testing.T) {
 		PrivateKey:    rsaPEM,
 	}
 
-	jwtStr1, err := testApp.CreateClientAssertion("goodapi-code-test")
+	jwtStr1, err := testApp.CreateClientAssertion("fooshop")
 	if err != nil {
 		t.Fatalf("CreateClientAssertion RS256 failed: %v", err)
 	}
-	jwtStr2, err := testApp.CreateClientAssertion("goodapi-code-test.myshopify.com")
+	jwtStr2, err := testApp.CreateClientAssertion("fooshop.myshopify.com")
 	if err != nil {
 		t.Fatalf("CreateClientAssertion RS256 second call failed: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestCreateClientAssertionRS256AndES256(t *testing.T) {
 	if claims1.Iss != "client-id-123" || claims1.Sub != "client-id-123" {
 		t.Fatalf("unexpected iss/sub: %+v", claims1)
 	}
-	if claims1.Aud != "https://goodapi-code-test.myshopify.com/admin/oauth/access_token" {
+	if claims1.Aud != "https://fooshop.myshopify.com/admin/oauth/access_token" {
 		t.Fatalf("unexpected aud: %s", claims1.Aud)
 	}
 	if claims1.Exp-claims1.Iat != AppOnlyAssertionLifetimeSeconds {
@@ -136,7 +136,7 @@ func TestCreateClientAssertionRS256AndES256(t *testing.T) {
 		KeyID:         "kid-ec-2026",
 		PrivateKey:    ecPEM,
 	}
-	ecJWT, err := ecApp.CreateClientAssertion("goodapi-code-test.myshopify.com")
+	ecJWT, err := ecApp.CreateClientAssertion("fooshop.myshopify.com")
 	if err != nil {
 		t.Fatalf("CreateClientAssertion ES256 failed: %v", err)
 	}
@@ -159,14 +159,14 @@ func TestAppOnlyKeyValidationEdgeCases(t *testing.T) {
 
 	// Invalid PEM
 	badApp := App{ApiKey: "cid", KeyID: "kid", PrivateKey: "not-a-pem"}
-	if _, err := badApp.CreateClientAssertion("goodapi-code-test.myshopify.com"); err == nil {
+	if _, err := badApp.CreateClientAssertion("fooshop.myshopify.com"); err == nil {
 		t.Fatalf("expected error for invalid PEM")
 	}
 
 	// P-384 curve should be rejected (Shopify only allows P-256 for ES256)
 	_, p384PEM := generateTestECPrivateKeyPEM(t, elliptic.P384())
 	p384App := App{ApiKey: "cid", KeyID: "kid", PrivateKey: p384PEM}
-	if _, err := p384App.CreateClientAssertion("goodapi-code-test.myshopify.com"); err == nil {
+	if _, err := p384App.CreateClientAssertion("fooshop.myshopify.com"); err == nil {
 		t.Fatalf("expected error for P-384 EC key")
 	}
 
@@ -277,7 +277,7 @@ func TestAppOnlyTokenExchangeCacheRetryAnd401Recovery(t *testing.T) {
 				// Simulate expired/revoked token 401 on first attempt
 				return httpmock.NewStringResponse(401, `{"errors":"[API] Invalid API key or access token"}`), nil
 			}
-			return httpmock.NewStringResponse(200, `{"data":{"shop":{"name":"goodapi-code-test"}}}`), nil
+			return httpmock.NewStringResponse(200, `{"data":{"shop":{"name":"fooshop"}}}`), nil
 		})
 
 	apiClient := app.NewClient("fooshop", "legacy_ignored_token", WithVersion(testApiVersion))
@@ -300,5 +300,158 @@ func TestAppOnlyTokenExchangeCacheRetryAnd401Recovery(t *testing.T) {
 	}
 	if receivedBodies[0] == "" || receivedBodies[0] != receivedBodies[1] {
 		t.Fatalf("expected request body to be preserved and replayed on 401 retry, got %v", receivedBodies)
+	}
+}
+
+func TestAppOnlyUninstallReinstallAndScopeUpgradeForceRefresh(t *testing.T) {
+	setup()
+	defer teardown()
+	ClearAllAppOnlyTokenCaches()
+	t.Cleanup(ClearAllAppOnlyTokenCaches)
+
+	_, rsaPEM := generateTestRSAPrivateKeyPEM(t, 2048)
+	testApp := App{
+		ApiKey:        "client-reinstall",
+		AppOnlyTokens: true,
+		KeyID:         "kid-2026",
+		PrivateKey:    rsaPEM,
+		Client:        client,
+	}
+
+	var seq int32
+	httpmock.RegisterResponder("POST", "https://fooshop.myshopify.com/admin/oauth/access_token",
+		func(req *http.Request) (*http.Response, error) {
+			n := atomic.AddInt32(&seq, 1)
+			if n == 1 {
+				return httpmock.NewStringResponse(200, `{"access_token":"tok_install_1","scope":"read_orders","expires_in":3600}`), nil
+			}
+			return httpmock.NewStringResponse(200, `{"access_token":"tok_reinstall_2","scope":"read_orders,write_products","expires_in":3600}`), nil
+		})
+
+	tok1, err := testApp.GetAccessToken("fooshop.myshopify.com", "code-1")
+	if err != nil || tok1 != "tok_install_1" {
+		t.Fatalf("expected tok_install_1, got %q err=%v", tok1, err)
+	}
+
+	// Even if APP_UNINSTALLED webhook has not arrived yet (or merchant re-authorized scopes),
+	// GetAccessToken must force-refresh and never return stale tok_install_1 from cache.
+	tok2, err := testApp.GetAccessToken("fooshop.myshopify.com", "code-2")
+	if err != nil || tok2 != "tok_reinstall_2" {
+		t.Fatalf("expected GetAccessToken to force-refresh tok_reinstall_2, got %q err=%v", tok2, err)
+	}
+
+	cached, err := testApp.GetAppOnlyAccessToken(context.Background(), "fooshop.myshopify.com")
+	if err != nil || cached.AccessToken != "tok_reinstall_2" || cached.Scope != "read_orders,write_products" {
+		t.Fatalf("expected cache to hold tok_reinstall_2 with updated scopes, got %+v err=%v", cached, err)
+	}
+
+	// Uninstall eviction clears both app-scoped and global lookups immediately.
+	testApp.InvalidateAppOnlyAccessToken("fooshop.myshopify.com")
+	if testApp.GetCachedAppOnlyToken("fooshop.myshopify.com") != nil {
+		t.Fatalf("expected nil from app.GetCachedAppOnlyToken after InvalidateAppOnlyAccessToken")
+	}
+	if GetCachedAppOnlyToken("fooshop.myshopify.com") != nil {
+		t.Fatalf("expected nil from GetCachedAppOnlyToken after InvalidateAppOnlyAccessToken")
+	}
+}
+
+func TestAppOnlyInvalidationEpochPreventsStaleInFlightCacheWrite(t *testing.T) {
+	setup()
+	defer teardown()
+	ClearAllAppOnlyTokenCaches()
+	t.Cleanup(ClearAllAppOnlyTokenCaches)
+
+	_, rsaPEM := generateTestRSAPrivateKeyPEM(t, 2048)
+	testApp := App{
+		ApiKey:        "client-race",
+		AppOnlyTokens: true,
+		KeyID:         "kid-race",
+		PrivateKey:    rsaPEM,
+		Client:        client,
+	}
+
+	enteredOAuth := make(chan struct{})
+	releaseOAuth := make(chan struct{})
+	var callCount int32
+
+	httpmock.RegisterResponder("POST", "https://fooshop.myshopify.com/admin/oauth/access_token",
+		func(req *http.Request) (*http.Response, error) {
+			n := atomic.AddInt32(&callCount, 1)
+			if n == 1 {
+				close(enteredOAuth)
+				<-releaseOAuth
+				return httpmock.NewStringResponse(200, `{"access_token":"stale_inflight_token","scope":"read_orders","expires_in":3600}`), nil
+			}
+			return httpmock.NewStringResponse(200, `{"access_token":"fresh_post_reinstall_token","scope":"read_orders","expires_in":3600}`), nil
+		})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = testApp.GetAppOnlyAccessToken(context.Background(), "fooshop.myshopify.com")
+	}()
+
+	<-enteredOAuth
+	// Simulate APP_UNINSTALLED arriving while the pre-uninstall OAuth mint is in flight.
+	testApp.InvalidateAppOnlyAccessToken("fooshop.myshopify.com")
+	close(releaseOAuth)
+	<-done
+
+	if got := testApp.GetCachedAppOnlyToken("fooshop.myshopify.com"); got != nil {
+		t.Fatalf("expected in-flight token NOT to populate cache after concurrent invalidation, got %+v", got)
+	}
+
+	fresh, err := testApp.GetAppOnlyAccessToken(context.Background(), "fooshop.myshopify.com")
+	if err != nil || fresh.AccessToken != "fresh_post_reinstall_token" {
+		t.Fatalf("expected fresh_post_reinstall_token after reinstall, got %+v err=%v", fresh, err)
+	}
+}
+
+func TestAppOnlyMultiAppCacheIsolation(t *testing.T) {
+	setup()
+	defer teardown()
+	ClearAllAppOnlyTokenCaches()
+	t.Cleanup(ClearAllAppOnlyTokenCaches)
+
+	_, rsaPEM := generateTestRSAPrivateKeyPEM(t, 2048)
+	appA := App{
+		ApiKey:        "client-app-a",
+		AppOnlyTokens: true,
+		KeyID:         "kid-shared",
+		PrivateKey:    rsaPEM,
+		Client:        client,
+	}
+	appB := App{
+		ApiKey:        "client-app-b",
+		AppOnlyTokens: true,
+		KeyID:         "kid-shared",
+		PrivateKey:    rsaPEM,
+		Client:        client,
+	}
+
+	httpmock.RegisterResponder("POST", "https://fooshop.myshopify.com/admin/oauth/access_token",
+		func(req *http.Request) (*http.Response, error) {
+			b, _ := io.ReadAll(req.Body)
+			vals, _ := url.ParseQuery(string(b))
+			cid := vals.Get("client_id")
+			return httpmock.NewStringResponse(200, `{"access_token":"tok_`+cid+`","scope":"read_orders","expires_in":3600}`), nil
+		})
+
+	tokA, err := appA.GetAppOnlyAccessToken(context.Background(), "fooshop.myshopify.com")
+	if err != nil || tokA.AccessToken != "tok_client-app-a" {
+		t.Fatalf("unexpected appA token: %+v err=%v", tokA, err)
+	}
+	tokB, err := appB.GetAppOnlyAccessToken(context.Background(), "fooshop.myshopify.com")
+	if err != nil || tokB.AccessToken != "tok_client-app-b" {
+		t.Fatalf("unexpected appB token: %+v err=%v", tokB, err)
+	}
+
+	// Invalidating appA must not evict appB's cached token.
+	appA.InvalidateAppOnlyAccessToken("fooshop.myshopify.com")
+	if appA.GetCachedAppOnlyToken("fooshop.myshopify.com") != nil {
+		t.Fatalf("expected appA cache to be evicted")
+	}
+	if gotB := appB.GetCachedAppOnlyToken("fooshop.myshopify.com"); gotB == nil || gotB.AccessToken != "tok_client-app-b" {
+		t.Fatalf("expected appB cache to remain intact, got %+v", gotB)
 	}
 }

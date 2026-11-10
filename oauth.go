@@ -42,7 +42,9 @@ func (app App) GetAccessToken(shopName string, code string) (string, error) {
 		if app.Client != nil && app.Client.Client != nil {
 			fallbackTransport = app.Client.Client.Transport
 		}
-		tok, err := app.getAppOnlyAccessTokenWithTransport(context.Background(), shopName, fallbackTransport)
+		// Always force-refresh during install, reinstall, or scope re-authorization
+		// so a pre-uninstall revoked token or pre-upgrade scope token is never reused.
+		tok, err := app.forceRefreshAppOnlyAccessTokenWithTransport(context.Background(), shopName, fallbackTransport)
 		if err != nil {
 			return "", err
 		}
